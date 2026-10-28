@@ -35,4 +35,4 @@ sh -n start.command
 
 `primary-record`: Owen authorized public publication under `owenbyram-spec` on 2026-10-28 without adding a license at this stage. Destination: [vesper-bank-rec](https://github.com/owenbyram-spec/vesper-bank-rec).
 
-`open`: Public visibility, default branch and uploaded source contents must be verified after upload and recorded in [the release checklist](../RELEASE-CHECKLIST.md). Local test results alone do not establish that publication succeeded.
+`repository-observation`: Public GitHub visibility and default branch `main` were verified after upload on 2026-10-28. All 49 remote file hashes and modes matched the reviewed local source. The local `main` branch tracks `origin/main`; no LICENSE file was added. Publication checks are recorded in [the release checklist](../RELEASE-CHECKLIST.md).
