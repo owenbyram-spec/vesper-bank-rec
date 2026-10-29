@@ -54,8 +54,10 @@ This is a local source/runtime update. No new GitHub source or binary release wa
 - [x] Fix and reproduce rapid same-port restart while still refusing an occupied listener; verify saved financial continuity and duplicate-instance prevention.
 - [x] Pass 362 pytest tests, 33 Node UI checks, Ruff, JavaScript/shell syntax, local documentation targets and diff whitespace.
 - [x] Recheck the completed original workspace's unchanged financial-document hash.
-- [ ] Publish the reviewed 0.3.0 source update and verify the public downloaded ZIP against the reviewed file hashes/modes.
+- [x] Publish the reviewed 0.3.0 source update and verify all 81 files in the public downloaded ZIP against the reviewed hashes, including the executable macOS launcher; exercise its fresh pinned installation and synthetic exports.
 
 Live firm-authorized Xero, real model/QuickBooks access, real credential-store persistence, Windows and normal Finder/Gatekeeper behavior remain unverified. The source download requires Python; no Python-free app or hosted deployment is claimed. The [release notes](docs/RELEASE-NOTES.md) describe the update and [Verification](docs/VERIFICATION.md) records the checks.
+
+The public update was first published as `f033484ba2db0613f73413558998b7c4841208fd`. Its downloaded main ZIP returned HTTP 200, matched all reviewed source files and preserved the shell launcher executable bit. The actual public download installed its pinned environment and passed the account-free synthetic workflow/export checks. Publication verification is recorded separately from the earlier local candidate.
 
 The initial build plan covered local repositories and commits. Owen's subsequent publication instruction authorizes this public-source step. These repositories do not include source-platform history, local workspaces, exports or credentials.
