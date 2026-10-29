@@ -21,6 +21,8 @@ The **2026-10-28 preparation evidence** records 478 Python tests, 49 Node UI che
 
 The complete 478-test suite and 49 UI checks were also newly rerun on **2026-10-29** for this release, with Ruff, syntax, source-inventory and whitespace checks passing. Fresh public-download verification is recorded separately from these source checks.
 
+The actual public 0.4.0 source ZIP matched all 92 reviewed files. Its fresh pinned installation, synthetic source controls, selected duplicate review, zero-provider-call rehearsal, four export formats, reopened numeric workbook, backup restore and duplicate-launch reuse passed. See [Verification](VERIFICATION.md) for the exact tested source and limits.
+
 A real embedded AI explanation remains unverified, including the previously reported setup discrepancy. Firm-authorized accounting API reads, real OS credential-store persistence, Windows execution and normal Finder launch behavior also remain unverified. Tests use synthetic records and injected provider responses. Existing optional QuickBooks Online and bounded Xero reads retain their documented limits.
 
 The local-server workflow remains the supported delivery path. The older desktop experiment is deferred; no Python-free app, hosted service, accounting writeback or software license is added.
