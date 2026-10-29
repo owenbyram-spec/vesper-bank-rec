@@ -7,11 +7,12 @@ import subprocess
 import pytest
 
 
-def test_setup_browser_logic_with_synthetic_local_api():
+@pytest.mark.parametrize("suite_name", ["setup_ui.test.cjs", "bank_evidence_ui.test.cjs"])
+def test_setup_browser_logic_with_synthetic_local_api(suite_name):
     node = shutil.which("node")
     if node is None:
         pytest.skip("Optional frontend regression checks require Node.js 18 or newer")
-    suite = Path(__file__).with_name("setup_ui.test.cjs")
+    suite = Path(__file__).with_name(suite_name)
     result = subprocess.run(
         [node, "--test", str(suite)], text=True, capture_output=True, timeout=30,
     )

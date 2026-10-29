@@ -20,4 +20,8 @@ Explicit real assistant requests transmit the current prompt and permitted workf
 
 Imports, model output and descriptions are untrusted data. They cannot select another workspace, access credentials, execute code or approve proposals. Financial calculations remain deterministic. Review and approval here records a local operator action; typed names do not establish independently verified preparer/approver identities.
 
+The data folder also contains local assistant request receipts with returned evidence, saved response text and usage counts. Raw questions are hashed for request binding rather than stored in these receipts; API keys and provider headers are excluded. A completed identical retry can reuse its receipt without a new model call. Failed or interrupted attempts are not retried automatically; a new live request may incur usage. Treat these receipts as financial data. Deleting a workspace removes its receipts. The separate run log contains hashed workspace identity, status, evidence/proposal identifiers and available usage counts.
+
+Saved assistant review checklists are included in workspace backups and workpaper exports. They execute nothing; their displayed status becomes stale when financial evidence changes. Request replay receipts and the operational run log are not included in financial backups.
+
 Use versioned JSON export/restore for a complete workflow backup and CSV/Excel/printable exports for review. Restoring a backup requires validation and must preserve money, provenance and scope. Keep originals until you verify a restored copy. Secrets are excluded from all backup/export formats.

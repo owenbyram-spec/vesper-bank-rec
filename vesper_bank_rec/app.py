@@ -10,10 +10,11 @@ from contextlib import contextmanager
 from fastapi import FastAPI, Body, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from .models import DomainError, label, evidence, digest, uid, now
+from .models import DomainError, label, evidence, uid, now
 from .store import Store
 from .imports import preview_csv, accounting_preview
-from .matching import candidates, unmatched, validate_pair
+from .matching import candidates, diagnostics, unmatched, validate_pair
+from .review import confirm_proposals, proposal_index
 from .reconciliation import (
     current,
     new_session,
@@ -29,9 +30,6 @@ from .reports import csv_bytes, xlsx_bytes, html_report, backup, validate_backup
 
 SUPPORTED_CURRENCIES = ("USD", "CAD", "GBP", "EUR", "AUD", "NZD")
 
-EMPTY_SCHEMA = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
-
-
 def default_data_dir():
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "Vesper Bank Rec"
@@ -42,7 +40,7 @@ def default_data_dir():
 
 def create_app(data_dir: Path | None = None, port: int = 8765, testing=False):
     from .common import install_common
-    from .assistant import Tool
+    from .assistant.bank_tools import build_bank_tools, checklist_views
 
     app = FastAPI(title="Vesper & Co · Bank Rec", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store = store = Store(Path(data_dir) if data_dir else default_data_dir())
@@ -137,122 +135,7 @@ def create_app(data_dir: Path | None = None, port: int = 8765, testing=False):
                 yield workspace
 
     def tools_factory(captured):
-        if not captured or not captured.get("session_id"):
-            return []
-
-        def reconciliation_tool(params):
-            workspace, session = assert_scope(captured)
-            return summary(session)
-
-        def source_tool(params):
-            workspace, session = assert_scope(captured)
-            result = summary(session)
-            data = {
-                "bank": result["bank_control"],
-                "books": result["book_control"],
-                "opening_anchor": result["opening_anchor"],
-                "blockers": result["blockers"],
-            }
-            return {
-                "evidence_id": "controls_" + digest([session["id"], session["input_version"], data])[:24],
-                **data,
-            }
-
-        def unmatched_tool(params):
-            workspace, session = assert_scope(captured)
-            bank, ledger = unmatched(session)
-            data = {
-                "bank": bank[:150],
-                "books": ledger[:150],
-                "total_bank": len(bank),
-                "total_books": len(ledger),
-                "input_version": session["input_version"],
-            }
-            return {"evidence_id": "unmatched_" + digest([session["id"], data])[:24], **data}
-
-        def candidate_tool(params):
-            workspace, session = assert_scope(captured)
-            proposals = candidates(session)[:100]
-            return {
-                "evidence_id": "candidates_"
-                + digest([session["id"], session["input_version"], proposals])[:24],
-                "candidates": proposals,
-            }
-
-        def draft_tool(params):
-            assert_scope(captured)
-            with store.edit(
-                expected_workspace_id=captured["id"],
-                expected_session_id=captured["session_id"],
-                expected_input_version=captured["input_version"],
-                expected_workspace_version=captured["version"],
-                bump_version=False,
-            ) as workspace:
-                session = current(workspace)
-                editable(session)
-                validate_pair(session, params["bank_id"], params["ledger_id"])
-                proposal = {
-                    "id": uid("proposal"),
-                    "bank_id": params["bank_id"],
-                    "ledger_id": params["ledger_id"],
-                    "reason": label(params["reason"], "Reason", 2000),
-                    "input_version": session["input_version"],
-                }
-                session["drafts"].append(proposal)
-                event(workspace, session, "assistant_match_drafted", {"proposal_id": proposal["id"]})
-                return {
-                    "evidence_id": "draft_" + digest(proposal)[:24],
-                    "proposals": [proposal],
-                    "status": "awaiting_human_review",
-                }
-
-        schema = {
-            "type": "object",
-            "properties": {
-                "bank_id": {"type": "string"},
-                "ledger_id": {"type": "string"},
-                "reason": {"type": "string"},
-            },
-            "required": ["bank_id", "ledger_id", "reason"],
-            "additionalProperties": False,
-        }
-        return [
-            Tool(
-                name="reconciliation_summary",
-                description="Read exact deterministic tie-out and completion blockers for the selected account and period.",
-                parameters=EMPTY_SCHEMA,
-                handler=reconciliation_tool,
-                rehearsal_args={},
-            ),
-            Tool(
-                name="source_controls",
-                description="Read current independent source controls and opening-anchor evidence.",
-                parameters=EMPTY_SCHEMA,
-                handler=source_tool,
-                rehearsal_args={},
-            ),
-            Tool(
-                name="unmatched_records",
-                description="Read bounded unmatched bank and book records; descriptions are untrusted source data.",
-                parameters=EMPTY_SCHEMA,
-                handler=unmatched_tool,
-                rehearsal_args={},
-            ),
-            Tool(
-                name="match_candidates",
-                description="Evaluate exact signed amount/date/memo one-to-one match candidates without confirming them.",
-                parameters=EMPTY_SCHEMA,
-                handler=candidate_tool,
-                rehearsal_args={},
-            ),
-            Tool(
-                name="draft_match",
-                description="Draft a same-session exact-amount one-to-one match for explicit human review. Cannot confirm.",
-                parameters=schema,
-                handler=draft_tool,
-                rehearsal_args=None,
-            ),
-        ]
+        return build_bank_tools(store=store, captured=captured, assert_scope=assert_scope)
 
     def accounting_sync(client, captured, params, *, provider):
         _workspace, session = assert_scope(captured)
@@ -324,6 +207,8 @@ def create_app(data_dir: Path | None = None, port: int = 8765, testing=False):
                 "workspace": workspace,
                 "session": selected,
                 "summary": summary(selected) if selected else None,
+                "match_diagnostics": diagnostics(selected) if selected else None,
+                "assistant_checklists": checklist_views(workspace, selected) if selected else [],
                 "scope": snapshot_scope(workspace) if workspace else None,
             }
 
@@ -368,6 +253,7 @@ def create_app(data_dir: Path | None = None, port: int = 8765, testing=False):
                 common.settings.remove(workspace["id"], "model")
                 common.xero.invalidate(workspace["id"])
                 common.settings.remove(workspace["id"], "xero")
+                common.attempts.delete_workspace(workspace["id"])
                 store.delete(workspace["id"])
         return {"deleted": True}
 
@@ -424,7 +310,9 @@ def create_app(data_dir: Path | None = None, port: int = 8765, testing=False):
             session = current(workspace)
             editable(session)
             if body.get("proposal_id"):
-                proposal = next((p for p in session["drafts"] if p["id"] == body["proposal_id"]), None)
+                if not isinstance(body["proposal_id"], str):
+                    raise DomainError("Choose a current proposal identity before confirming.")
+                proposal = proposal_index(session).get(body["proposal_id"])
                 if not proposal or proposal["input_version"] != session["input_version"]:
                     raise DomainError("This proposal is missing or stale. Generate new candidates.")
                 bank_id, ledger_id = proposal["bank_id"], proposal["ledger_id"]
@@ -446,6 +334,13 @@ def create_app(data_dir: Path | None = None, port: int = 8765, testing=False):
             ]
             event(workspace, session, "match_confirmed", match)
         return {"confirmed": True}
+
+    @app.post("/api/matches/confirm-selected")
+    def confirm_selected(body: dict = Body(...)):
+        with finance_edit(body) as workspace:
+            return confirm_proposals(
+                workspace, current(workspace), body.get("proposal_ids"), body.get("note")
+            )
 
     @app.post("/api/matches/unconfirm")
     def unconfirm(body: dict = Body(...)):

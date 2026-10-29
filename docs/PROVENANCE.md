@@ -1,8 +1,8 @@
 # Source provenance and release boundary
 
-`repository-observation`: This standalone tool was extracted/adapted from owner-supplied internal finance code. Bank reconciliation behavior references the internal PE Workflow Builder matching, statement controls and lifecycle. Cash forecast money/calculation code derives from the owner-supplied Sprint Money and 13-week forecast engine. Both use Sprint's guided-first-result idea inside the local app.
+`repository-observation`: This standalone Bank Rec tool was adapted from owner-supplied internal reconciliation code. Its scope covers bank and book source controls, deterministic matching and tie-out calculations, review requirements and reconciliation history.
 
-Only the scoped application code and synthetic examples belong in this repository. There is no runtime dependency on the source platforms. Their SaaS identity, billing, broader module catalog, queues, hosted setup, client evidence and Git history are excluded.
+This repository contains the standalone local application, setup instructions and synthetic examples. Keep client records, exports and credentials separate from the source download. The embedded assistant explains scoped evidence and drafts proposals for human review.
 
 `primary-record`: On 2026-10-28, Owen selected GitHub owner `owenbyram-spec`, authorized public publication and instructed: “Publish publicly without adding a license yet.” The publication destination is [vesper-bank-rec](https://github.com/owenbyram-spec/vesper-bank-rec).
 
@@ -10,4 +10,4 @@ Only the scoped application code and synthetic examples belong in this repositor
 
 `synthetic`: All demonstration businesses and financial records are fictional.
 
-`inferred/provisional`: These tools demonstrate one complete finance workflow. Broader workflows, additional integrations, consolidation, shared team access and bespoke implementation remain separate Vesper & Co service opportunities. No conversion, savings, compliance or production-readiness outcome is claimed.
+`inferred/provisional`: The tool supports reconciliation of one bank account and statement period at a time. The verification record distinguishes automated checks, synthetic walkthrough evidence and remaining live-integration gaps.

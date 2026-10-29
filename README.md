@@ -4,6 +4,12 @@ A standalone local finance tool designed for **CAS teams**. Reconcile one bank a
 
 The assistant is built into the app. Financial calculations are deterministic; AI reads scoped results and drafts proposals for explicit human review.
 
+Development stays within this tool: reconciliation calculations, source
+controls, the embedded assistant, accounting imports and exports. Its UI,
+data store and startup remain independent.
+
+Version **0.4.0** adds bank-specific exact, duplicate-group and memo matching, unmatched diagnostics, selected review and scoped assistant evidence pages, drafts, review checklists and request replay. [The extraction record](docs/BANK-REC-EXTRACTION.md) distinguishes these additions from capabilities still outstanding; this is not a full-parity claim.
+
 ## Run locally in your browser
 
 Download the [Bank Rec source ZIP](https://github.com/owenbyram-spec/vesper-bank-rec/archive/refs/heads/main.zip), then **extract it into a permanent folder before starting**. This download runs a local server and opens its interface in your browser; Python is required on the computer running it.
@@ -28,7 +34,7 @@ Begin with the labelled synthetic example; it needs no credentials. To add AI, c
 
 ## Setup and controls
 
-- [What's new in 0.3.0](docs/RELEASE-NOTES.md)
+- [What's new in 0.4.0](docs/RELEASE-NOTES.md)
 - [Quick start](docs/QUICK-START.md)
 - [Model API-key setup](docs/MODEL-SETUP.md)
 - [Accounting connections and CSV alternatives](docs/ACCOUNTING-CONNECTIONS.md)

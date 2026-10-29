@@ -21,3 +21,10 @@
 .xero-setup .connection-summary{font-size:12px}
 .xero-import-warning{padding:12px 14px;border-left:3px solid var(--accent);background:var(--pale);color:var(--ink)}
 #xero-redirect-uri{display:block;padding:10px;background:#f0f1e9;overflow-wrap:anywhere}
+
+.bank-evidence{white-space:normal;max-height:none;overflow:visible;overflow-wrap:anywhere}
+.bank-evidence dl{display:grid;grid-template-columns:minmax(70px,1fr) minmax(0,2fr);gap:4px 10px}
+.bank-evidence dd{margin:0;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.bank-evidence .record,.bank-evidence .proposal{margin:9px 0;padding:9px;border:1px solid var(--line)}
+.bank-evidence details pre{max-height:220px;overflow:auto;white-space:pre-wrap;font-size:10px}
+.bank-evidence li{margin:7px 0}

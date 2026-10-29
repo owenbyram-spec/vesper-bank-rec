@@ -89,7 +89,7 @@ function makeDocument() {
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return {promise, resolve}; }
 
-async function setup({configured = false, failTest = false, workspaces, selected, testGate, demoGate, xero = {}, session = null} = {}) {
+async function setup({configured = false, failTest = false, workspaces, selected, testGate, demoGate, xero = {}, session = null, assistantReplies = []} = {}) {
   const document = makeDocument();
   const calls = [], events = [], popups = [], timers = new Map();
   let nextTimer = 0;
@@ -198,6 +198,17 @@ async function setup({configured = false, failTest = false, workspaces, selected
       if (xeroSyncFails) return {ok: false, json: async () => ({detail: 'Synthetic unsupported movement; previous book evidence retained.'})};
       active.version++; activeSession.input_version++;
       result = {ok: true, result: {message: 'Controlled synthetic Xero ledger imported.', rows: 2}};
+    } else if (url === '/api/matches/confirm-selected' || url === '/api/matches/confirm') {
+      const pairs=url.endsWith('confirm-selected')?activeSession.drafts.filter(p=>body.proposal_ids.includes(p.id)):[body.proposal_id?activeSession.drafts.find(p=>p.id===body.proposal_id):body];
+      for(const pair of pairs)activeSession.matches.push({id:'match_'+pair.bank_id,bank_id:pair.bank_id,ledger_id:pair.ledger_id,note:body.note});
+      activeSession.drafts=activeSession.drafts.filter(p=>!pairs.some(pair=>pair.bank_id===p.bank_id||pair.ledger_id===p.ledger_id));
+      active.version++;result={confirmed:true,count:pairs.length};
+    } else if (url === '/api/assistant') {
+      const reply=assistantReplies.shift()||{};
+      if(reply.started)reply.started.resolve();
+      if(reply.gate)await reply.gate.promise;
+      if(reply.networkFailure)throw Error('Synthetic interrupted network');
+      result=reply.result||{mode:'synthetic-rehearsal',message:'Synthetic evidence reviewed.',evidence:[],proposals:[]};
     } else if (url === '/api/sessions/new') {
       activeSession = xeroSession({account_id: body.account_id, account_label: body.account_label, period_start: body.period_start, period_end: body.period_end});
       sessions.set(active.id, activeSession); active.sessions = [activeSession]; active.version++; result = {ok: true};
@@ -767,4 +778,69 @@ test('Xero disconnect affects only its selected connection, preserves AI and can
   assert.equal([...ui.timers.values()].some(timer => timer.delay === 1500), true);
   ui.node('settings').close();
   assert.equal([...ui.timers.values()].some(timer => timer.delay === 1500), false);
+});
+
+function reviewSession(){
+  const row=(id,amount,description)=>({id,date:'2026-09-02',amount,description,ordinal:1});
+  return xeroSession({bank:{source_hash:'a'.repeat(64),rows:[row('bank_one','-75.00','First software'),row('bank_two','-75.00','Second software')]},ledger:{source_hash:'b'.repeat(64),rows:[row('book_one','-75.00','First software'),row('book_two','-75.00','Second software')]},drafts:[{id:'proposal_one',bank_id:'bank_one',ledger_id:'book_one',reason:'Exact group'},{id:'proposal_two',bank_id:'bank_two',ledger_id:'book_two',reason:'Exact group'}]});
+}
+test('Selected review starts empty and submits only explicitly selected proposal identities with note and scope',async()=>{
+  const ui=await setup({session:reviewSession()});
+  ui.node('rehearsal').checked=true;ui.node('chat-message').value='Explain current evidence';await ui.node('chat-form').fire('submit');
+  assert.equal(ui.node('batch-confirm').disabled,true);
+  const checks=ui.node('proposal-list').querySelectorAll('*').filter(n=>n.type==='checkbox');
+  assert.equal(checks.length,2);assert(checks.every(n=>!n.checked));
+  checks[1].checked=true;await checks[1].fire('change');
+  ui.node('batch-note').value='Operator inspected the second duplicate occurrence.';
+  await ui.node('batch-review').fire('submit');
+  const sent=ui.calls.find(c=>c.url==='/api/matches/confirm-selected');
+  assert.deepEqual(sent.body.proposal_ids,['proposal_two']);
+  assert.match(sent.body.note,/second duplicate/);assert.equal(sent.body.scope.session_id,'session_xero');
+  assert.equal(ui.state().session.matches[0].bank_id,'bank_two');
+  assert(ui.node('chat-log').children.some(n=>n.textContent.includes('reconciliation changed after the response')));
+  assert.equal(ui.node('batch-confirm').disabled,true);
+});
+test('Manual pairing and filtered exception views retain duplicate source identities',async()=>{
+  const ui=await setup({session:reviewSession()});
+  ui.node('exception-search').value='bank_two';await ui.node('exception-search').fire('input');
+  assert.match(ui.node('exceptions-count').textContent,/^1 unmatched/);
+  ui.node('manual-bank').value='bank_two';await ui.node('manual-bank').fire('change');
+  assert.equal(ui.node('manual-ledger').children.length,3);
+  ui.node('manual-ledger').value='book_two';ui.node('manual-note').value='Operator reviewed the second occurrence.';
+  await ui.node('manual-match').fire('submit');
+  const sent=ui.calls.find(c=>c.url==='/api/matches/confirm');
+  assert.equal(sent.body.bank_id,'bank_two');assert.equal(sent.body.ledger_id,'book_two');
+  assert.equal(sent.body.input_version,1);assert.equal(sent.body.scope.revision,1);
+});
+test('Uncertain assistant retry reuses its request receipt rather than silently spending twice',async()=>{
+  const ui=await setup({assistantReplies:[{networkFailure:true},{}]});
+  ui.node('rehearsal').checked=true;ui.node('chat-message').value='Explain my evidence';
+  await ui.node('chat-form').fire('submit');
+  assert.equal(ui.node('chat-message').value,'Explain my evidence');
+  await ui.node('chat-form').fire('submit');
+  const sent=ui.calls.filter(c=>c.url==='/api/assistant');
+  assert.equal(sent.length,2);assert.equal(sent[0].body.request_id,sent[1].body.request_id);
+  assert.match(sent[0].body.request_id,/^question_/);
+});
+test('A delayed assistant response cannot appear under a different workspace',async()=>{
+  const gate=deferred(),started=deferred();
+  const workspaces=[{id:'workspace_first',name:'First client',synthetic:true,currency:'USD',version:1,sessions:[]},{id:'workspace_second',name:'Second client',synthetic:true,currency:'USD',version:1,sessions:[]}];
+  const ui=await setup({workspaces,assistantReplies:[{gate,started,result:{message:'OLD CLIENT RESPONSE',evidence:[],proposals:[]}}]});
+  ui.node('rehearsal').checked=true;ui.node('chat-message').value='Explain old client';
+  const pending=ui.node('chat-form').fire('submit');await started.promise;
+  ui.node('workspace-select').value='workspace_second';await ui.node('workspace-select').fire('change');
+  gate.resolve();await pending;
+  assert(!ui.node('chat-log').children.some(n=>n.textContent.includes('OLD CLIENT RESPONSE')));
+});
+
+test('A delayed assistant response is discarded after leaving and returning to the same workspace',async()=>{
+  const gate=deferred(),started=deferred();
+  const workspaces=[{id:'workspace_first',name:'First client',synthetic:true,currency:'USD',version:1,sessions:[]},{id:'workspace_second',name:'Second client',synthetic:true,currency:'USD',version:1,sessions:[]}];
+  const ui=await setup({workspaces,assistantReplies:[{gate,started,result:{message:'STALE RETURN RESPONSE',evidence:[{id:'old',label:'OLD EVIDENCE',data:{}}],proposals:[]}}]});
+  ui.node('rehearsal').checked=true;ui.node('chat-message').value='Explain old work';
+  const pending=ui.node('chat-form').fire('submit');await started.promise;
+  for(const selected of ['workspace_second','workspace_first']){ui.node('workspace-select').value=selected;await ui.node('workspace-select').fire('change');}
+  gate.resolve();await pending;
+  assert(!ui.node('chat-log').children.some(n=>n.textContent.includes('STALE RETURN RESPONSE')));
+  assert(!ui.node('chat-log').querySelectorAll('*').some(n=>n.textContent==='OLD EVIDENCE'));
 });

@@ -6,7 +6,7 @@ import io
 import json
 import re
 from .models import DomainError, digest, money, day, label, uid, now
-from .reconciliation import SCHEMA_VERSION, summary
+from .reconciliation import SCHEMA_VERSION, event, summary
 from .matching import validate_pair
 
 NUMERIC = re.compile(r"^-?\d+(?:\.\d+)?$")
@@ -17,6 +17,22 @@ def safe(value):
     if text.lstrip().startswith(("=", "+", "-", "@", "\t", "\r")) and not NUMERIC.fullmatch(text):
         return "'" + text
     return text
+
+
+def _checklists(workspace, session):
+    """Validate optional manual drafts without rewriting their historical status."""
+    from .assistant import AssistantError
+    from .assistant.bank_tools import checklist_views
+
+    if "assistant_plans" not in session:
+        return []
+    try:
+        views = checklist_views(workspace, session)
+        if any(plan["scope"]["input_version"] > session["input_version"] for plan in views):
+            raise DomainError("An assistant checklist refers to a future input version.")
+        return views
+    except (AssistantError, KeyError, TypeError, ValueError) as error:
+        raise DomainError("Saved assistant checklist validation failed. No workspace was restored.") from error
 
 
 def export_rows(workspace, session):
@@ -100,6 +116,20 @@ def export_rows(workspace, session):
         rows.append(["human_match", match["bank_id"], match["ledger_id"], "", match["accepted_at"]])
     for blocker in result["blockers"]:
         rows.append(["completion_blocker", "", blocker, "", ""])
+    for plan in _checklists(workspace, session):
+        # All checklist values remain protected text. They are manual proposals,
+        # not posting instructions, completed steps or financial calculations.
+        rows.extend([
+            ["assistant_checklist", plan["id"], plan["title"], "", plan["created_at"]],
+            ["assistant_checklist_goal", plan["id"], plan["goal"], "", plan["execution"]],
+            ["assistant_checklist_status", plan["id"], plan["status"], "", "human_review_only"],
+            ["assistant_checklist_scope", plan["id"], json.dumps(plan["scope"], sort_keys=True), "", plan["input_hash"]],
+            ["assistant_checklist_seal", plan["id"], plan["steps_hash"], "", ""],
+        ])
+        for step in plan["steps"]:
+            rows.append(["assistant_checklist_step", step["action"], step["note"], "", f"{plan['id']} / step {step['index']}"])
+        if plan.get("stale_reason"):
+            rows.append(["assistant_checklist_stale", plan["id"], plan["stale_reason"], "", ""])
     for entry in session["history"]:
         rows.append(
             ["history", entry["at"], entry["action"], "", json.dumps(entry["detail"], sort_keys=True)]
@@ -278,11 +308,31 @@ def validate_backup(payload):
             raise DomainError("Carried items require an evidenced opening anchor.")
         if session.get("status") not in ("draft", "review", "completed"):
             raise DomainError("Unsupported reconciliation status in backup.")
+        plans = _checklists(workspace, session)
+        if plans and (not isinstance(session.get("history"), list) or not isinstance(workspace.get("events"), list)):
+            raise DomainError("Assistant checklist restore requires valid audit history.")
         matches = list(session["matches"])
         session["matches"] = []
         for match in matches:
             validate_pair(session, match["bank_id"], match["ledger_id"])
             session["matches"].append(match)
+        drafts = session.get("drafts")
+        if not isinstance(drafts, list) or len(drafts) > 10000:
+            raise DomainError("Invalid or oversized match proposals in backup.")
+        proposal_ids = set()
+        for draft in drafts:
+            if not isinstance(draft, dict):
+                raise DomainError("Invalid match proposal in backup.")
+            identifier = draft.get("id")
+            if (not isinstance(identifier, str) or not identifier.strip() or len(identifier) > 180
+                    or identifier in proposal_ids):
+                raise DomainError("Invalid or repeated match proposal identity in backup.")
+            proposal_ids.add(identifier)
+            if (type(draft.get("input_version")) is not int
+                    or not 1 <= draft["input_version"] <= session["input_version"]):
+                raise DomainError("Invalid match proposal input version in backup.")
+            label(draft.get("reason"), "Match proposal reason", 2000)
+            validate_pair(session, draft.get("bank_id"), draft.get("ledger_id"))
         result = summary(session)
         if session["status"] == "completed" and (
             not result["ready_to_complete"]
@@ -323,6 +373,26 @@ def validate_backup(payload):
             raise DomainError("Backup outstanding continuity does not reproduce the prior completed period.")
     if workspace["active_session_id"] is not None and workspace["active_session_id"] not in ids:
         raise DomainError("Backup active session does not exist.")
+    old_workspace_id = workspace["id"]
     workspace["id"] = uid("workspace")
+    for session in workspace["sessions"]:
+        if not session.get("assistant_plans"):
+            continue
+        from .assistant.bank_tools import rebind_checklist
+
+        rebound, mappings = [], []
+        for original in session["assistant_plans"]:
+            restored = rebind_checklist(original, workspace["id"])
+            rebound.append(restored)
+            mappings.append({
+                "old_id": original["id"], "old_scope": dict(original["scope"]),
+                "old_steps_hash": original["steps_hash"], "new_id": restored["id"],
+                "new_scope": dict(restored["scope"]), "new_steps_hash": restored["steps_hash"],
+            })
+        session["assistant_plans"] = rebound
+        event(workspace, session, "assistant_checklists_restored", {
+            "source_workspace_id": old_workspace_id, "restored_workspace_id": workspace["id"],
+            "checklists": mappings,
+        })
     workspace["name"] = workspace["name"][:140] + " (restored)"
     return workspace

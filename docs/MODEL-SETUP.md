@@ -10,7 +10,9 @@ Bank Rec runs on your computer. The optional assistant uses your own OpenAI API 
 4. Choose **Connect assistant**. The app saves your connection and sends a small billable check containing no financial evidence. Wait for **Connected — ready to ask**. The key field clears after saving; that is expected.
 5. Choose **Finish** to return to the assistant. Ask, for example: “Explain this reconciliation and the outstanding item.” Leave **Synthetic rehearsal** unchecked for a real AI response. Rehearsal is separately labelled, uses scripted narration and makes no model call.
 
-A connection check confirms a small provider response; asking about the reconciliation also exercises the assistant's evidence tools. The assistant can explain results and draft match proposals. Review and confirm each pair separately with a truthful note. See [Verification](VERIFICATION.md) for what has actually been observed against a live account; automated tests use injected provider responses.
+A connection check confirms a small provider response; asking about the reconciliation also exercises the assistant's evidence tools. The assistant can explain results, draft a page of match proposals or save a review checklist. Review each pair with a truthful note, individually or using selected review. Checklists execute no actions. See [Verification](VERIFICATION.md) for what has actually been observed against a live account; automated tests use injected provider responses.
+
+Use **Explain the tie-out**, **Plan remaining work** or **Draft match suggestions** to prepare a question, then choose **Ask**. Drafting stops after a page of up to forty pairs. Request another page explicitly if needed. If a network interruption leaves a question in the box, retrying it in the same page reuses its request receipt. A failed or unfinished request will not run paid work again automatically; review any saved drafts before starting a new question.
 
 ## Get an API key
 

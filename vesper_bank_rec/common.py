@@ -18,6 +18,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from .assistant import AssistantError, ResponsesAdapter, run_assistant
+from .assistant.attempts import AssistantAttempts
 from .connectors import QBOClient, QBOError
 from .jobs import PollingJob, RefreshBusy
 from .security import LocalSecurityMiddleware
@@ -31,6 +32,7 @@ class CommonServices:
     qbo_factory: object
     adapter_factory: object
     xero: object = None
+    attempts: object = None
 
     @property
     def jobs(self):
@@ -158,6 +160,7 @@ def install_common(
         lambda workspace_id: QBOClient(settings, workspace_id, lock=qbo_lock),
         lambda bundle: ResponsesAdapter(api_key=bundle["api_key"], model=bundle["model"]),
     )
+    services.attempts = AssistantAttempts(data_dir)
     app.state.common = services
     app.add_middleware(
         LocalSecurityMiddleware, port=port, testing=testing,
@@ -447,6 +450,7 @@ def install_common(
             "workspace_hash": sha256(scope["id"].encode()).hexdigest(),
             "status": status,
             "mode": result.get("mode") if result else None,
+            "usage": result.get("usage") if result else None,
             "evidence_ids": [e["id"] for e in result.get("evidence", [])] if result else [],
             "proposal_ids": [
                 str(p.get("id", p.get("proposal_id", "draft")))[:180] for p in result.get("proposals", [])
@@ -467,15 +471,25 @@ def install_common(
         if rehearsal and scope.get("synthetic") is not True:
             raise AssistantError("Synthetic rehearsal is available only in a labelled synthetic workspace.")
         message = body.get("message", "")
+        if not isinstance(message, str) or not message.strip() or len(message) > 8000:
+            raise AssistantError("Enter a question within the message length limit.")
         cancelled = threading.Event()
         with state_lock:
             require_open()
             if scope["id"] in active_runs:
                 raise HTTPException(409, "An assistant run is already active. Cancel it or wait.")
             active_runs[scope["id"]] = cancelled
+        request_id = body.get("request_id", uuid.uuid4().hex)
+        claimed = False
         run_id = "run-" + uuid.uuid4().hex
-        record_run(run_id, scope, "started")
         try:
+            replay = services.attempts.claim(request_id, scope, message, rehearsal)
+            if replay is not None:
+                if not same_scope(scope):
+                    raise AssistantError("The workspace or evidence changed. Ask again in the selected period.")
+                return {**replay, "replayed": True}
+            claimed = True
+            record_run(run_id, scope, "started")
             bundle = None if rehearsal else settings.get(scope["id"], "model")
             result = run_assistant(
                 message=message,
@@ -487,12 +501,19 @@ def install_common(
                 scope_check=lambda: same_scope(scope),
             )
             record_run(run_id, scope, "succeeded", result)
-            return {**result, "run_id": run_id}
+            response = {**result, "run_id": run_id}
+            services.attempts.finish(request_id, "succeeded", response)
+            return response
         except (AssistantError, SettingsError, HTTPException):
-            record_run(run_id, scope, "cancelled" if cancelled.is_set() else "failed")
+            if claimed:
+                status = "cancelled" if cancelled.is_set() else "failed"
+                services.attempts.finish(request_id, status)
+                record_run(run_id, scope, status)
             raise
         except Exception:
-            record_run(run_id, scope, "failed")
+            if claimed:
+                services.attempts.finish(request_id, "failed")
+                record_run(run_id, scope, "failed")
             raise HTTPException(
                 400,
                 "The assistant could not complete this run. Your workflow is saved.",

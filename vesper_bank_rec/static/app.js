@@ -1,5 +1,6 @@
 'use strict';
 const $ = (id) => document.getElementById(id);
+let pendingAssistantRequest = null, assistantSelectionGeneration = 0, lastAssistantResponseScope = null, assistantEvidenceStale = false;
 let csrf = '', currentState = null, preview = null, company = null, controller = null, modelStatus = null, modelTesting = false, connectionGeneration = 0, exampleOpening = false;
 function el(tag, text, className) { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; if (className) node.className = className; return node; }
 function notice(message, error = false) { const activeDialog=document.querySelector('dialog[open]'); if(activeDialog){let feedback=activeDialog.querySelector('.dialog-feedback');if(!feedback){feedback=document.createElement('p');feedback.className='dialog-feedback';feedback.setAttribute('role','alert');activeDialog.prepend(feedback);}feedback.textContent=message;}  const node=$('notice'); node.textContent=message; node.className=error?'error':''; node.hidden=false; clearTimeout(notice.timer); notice.timer=setTimeout(()=>{node.hidden=true;}, error?14000:6000); }
@@ -9,12 +10,20 @@ function handle(fn){ return async(event)=>{ if(event)event.preventDefault(); try
 function data(form){return Object.fromEntries(new FormData(form));}
 async function refresh(){
   connectionGeneration++;
-  const prior=currentState?.workspace?.id,priorScope=JSON.stringify(currentState?.scope);
+  const prior=currentState?.workspace?.id,priorSession=currentState?.session?.id,priorScope=JSON.stringify(currentState?.scope);
   xeroInvalidate();
   currentState=await api('/api/state');
   render();
   const changed=prior!==currentState.workspace?.id;
+  if(prior&&(changed||priorSession!==currentState.session?.id)){
+    assistantSelectionGeneration++;
+    $('chat-log').replaceChildren(el('p','Ask about the selected client and period. Earlier responses belong to the previous selection.','chat-message assistant-message'));
+    pendingAssistantRequest=null;lastAssistantResponseScope=null;assistantEvidenceStale=false;
+  }
   if(priorScope!==JSON.stringify(currentState?.scope))xeroReset();
+  if(lastAssistantResponseScope&&lastAssistantResponseScope!==JSON.stringify(currentState?.scope)&&!assistantEvidenceStale){
+    chat('The reconciliation changed after the response above. Ask again for current evidence.');assistantEvidenceStale=true;
+  }
   if(changed){
     $('model-form').reset();
     modelStatus=null;
@@ -27,13 +36,109 @@ async function refresh(){
 function empty(node,message){node.replaceChildren(el('div',message,'empty'));}
 function option(value,text){const node=el('option',text);node.value=value;return node;}
 function sourceCard(side, control, source){const card=el('div',undefined,'source-card'); card.append(el('h3',side==='bank'?'Independent bank statement':'Book ledger'));card.append(el('span',control.ready?'Controls passed':'Source needed',control.ready?'pass':'fail')); if(source){const dl=el('dl');for(const [key,value]of[['Opening',source.opening],['Signed activity',source.activity],['Closing',source.closing],['Records',source.rows.length]]){dl.append(el('dt',key),el('dd',String(value)));}card.append(dl,el('p',source.source,'fine'),el('code','SHA-256 '+source.source_hash.slice(0,20)+'…'));} else card.append(el('p','Import the exact account and period, with independent opening and closing balances.','fine'));return card;}
-function record(row,side){const box=el('div',undefined,'record');box.append(el('span',side,'record-side'),el('strong',row.amount+' '+currentState.workspace.currency),el('p',row.description),el('small',row.date+(row.carried_from?' · carried from prior period':'')));return box;}
+function record(row,side){const box=el('div',undefined,'record');box.append(el('span',side,'record-side'),el('strong',row.amount+' '+currentState.workspace.currency),el('p',row.description),el('small',row.date+(row.carried_from?' · carried from prior period':'')),el('small','Source row '+row.ordinal+' · '+row.id));return box;}
 function rowById(id){const s=currentState.session;return [...(s.bank?.rows||[]),...(s.ledger?.rows||[]),...s.carry].find(row=>row.id===id);}
 function render(){const state=currentState,w=state.workspace,s=state.session,r=state.summary; $('workspace-select').replaceChildren(option('','Choose a workspace'),...state.workspaces.map(item=>option(item.id,workspaceLabel(item,state.workspaces))));$('workspace-select').value=w?.id||'';$('demo-another').textContent=state.workspaces.some(item=>item.synthetic)?'Resume example':'Try the example';$('workspace-name').textContent=w?w.name:'Keep each client’s work separate';$('welcome').hidden=!!w;$('workflow').hidden=!w;$('delete-workspace').hidden=!w;$('synthetic-label').hidden=!w?.synthetic;$('rehearsal').disabled=!w?.synthetic;if(!w?.synthetic)$('rehearsal').checked=false;$('period-work').hidden=!s;$('assistant-scope').textContent=w?w.name+(s?' · '+s.account_label+' · '+s.period_start+' → '+s.period_end:' · Select a period'):'Select a client and period to begin.';if(!w)return; $('session-select').replaceChildren(option('','Select a saved reconciliation'),...w.sessions.map(item=>option(item.id,item.account_label+' · '+item.period_start+' to '+item.period_end+' · '+item.status)));$('session-select').value=s?.id||'';if(!s){$('session-form').hidden=false;return;} $('period-title').textContent=s.account_label+' · '+s.period_start+' — '+s.period_end;$('status').textContent=s.status.toUpperCase();$('adjusted-bank').textContent=r.bank_control.ready?r.adjusted_bank+' '+s.currency:'—';$('adjusted-books').textContent=r.book_control.ready?r.adjusted_books+' '+s.currency:'—';$('difference').textContent=r.bank_control.ready&&r.book_control.ready?r.difference+' '+s.currency:'—';$('difference-card').className=r.difference==='0.00'?'':'unbalanced';$('bank-components').textContent='Closing + deposits − withdrawals + corrections';$('book-components').textContent='Closing + evidenced pending adjustments';$('match-count').textContent=r.matches+' confirmed match'+(r.matches===1?'':'es')+' · input version '+s.input_version;
 let next;if(s.status==='completed')next=[4,'Reconciliation complete','Export the selected session, or create the next contiguous period to carry outstanding items forward.'];else if(!r.bank_control.ready||!r.book_control.ready)next=[1,'Check the independent sources','Import a bank statement and book ledger with their own opening and closing controls.'];else if(!s.anchor)next=[1,'Review the opening anchor','Confirm the prior reconciled opening and explain any opening outstanding items.'];else if(s.drafts.length)next=[2,'Review suggested matches','Confirm the exact pairs you have reviewed; every decision remains yours.'];else if(r.blockers.length)next=[3,'Resolve the remaining exceptions',r.blockers[0]];else next=[4,'Ready for your acceptance','The adjusted balances agree. Review the evidence and explicitly accept the reconciliation.'];$('next-number').textContent=next[0];$('next-title').textContent=next[1];$('next-description').textContent=next[2];$('source-cards').replaceChildren(sourceCard('bank',r.bank_control,s.bank),sourceCard('ledger',r.book_control,s.ledger));$('anchor-title').textContent=s.anchor?'Opening anchor · '+s.anchor.kind.replaceAll('_',' '):'Review the opening reconciliation anchor';$('anchor-current').replaceChildren();if(s.anchor)$('anchor-current').append(el('p',s.anchor.evidence,'fine'),el('p','As of '+s.anchor.as_of+' · bank '+s.anchor.bank_opening+' / books '+s.anchor.book_opening,'fine'));$('anchor-form').hidden=s.anchor?.kind==='prior_completed';const start=new Date(s.period_start+'T12:00:00Z');start.setUTCDate(start.getUTCDate()-1);$('anchor-form').elements.as_of.value=start.toISOString().slice(0,10);
-const proposals=$('proposal-list');proposals.replaceChildren();if(!s.drafts.length)empty(proposals,'No pending suggestions. Generate candidates, or ask the assistant to investigate.');s.drafts.forEach(proposal=>{const b=rowById(proposal.bank_id),l=rowById(proposal.ledger_id);if(!b||!l)return;const box=el('div',undefined,'proposal');const pair=el('div',undefined,'pair');pair.append(record(b,'Bank statement'),el('span','↔','arrow'),record(l,'Books'));const foot=el('div',undefined,'proposal-foot');foot.append(el('p',proposal.reason));const review=el('form',undefined,'inline');const noteLabel=el('label','Review evidence / who performed it','grow');const note=el('textarea');note.required=true;note.maxLength=2000;note.rows=2;note.placeholder='Identify review evidence and the reviewer; describe any assistant demonstration as such.';note.disabled=s.status==='completed';noteLabel.append(note);const button=el('button','Confirm reviewed match','secondary');button.type='submit';button.disabled=s.status==='completed';review.addEventListener('submit',handle(async()=>{await api('/api/matches/confirm',{proposal_id:proposal.id,note:note.value});await refresh();}));review.append(noteLabel,button);box.append(pair,foot,review);proposals.append(box);});$('confirmed-title').textContent='Confirmed matches · '+s.matches.length;const confirmed=$('confirmed-list');confirmed.replaceChildren();s.matches.forEach(match=>{const box=el('div',undefined,'proposal');const pair=el('div',undefined,'pair');pair.append(record(rowById(match.bank_id),'Bank'),el('span','↔','arrow'),record(rowById(match.ledger_id),'Books'));const button=el('button','Undo this confirmation','quiet');button.disabled=s.status==='completed';button.addEventListener('click',handle(async()=>{await api('/api/matches/unconfirm',{match_id:match.id});await refresh();}));box.append(pair,el('p','Review note: '+match.note,'fine'),button);confirmed.append(box);});
-const usedB=new Set(s.matches.map(x=>x.bank_id)),usedL=new Set(s.matches.map(x=>x.ledger_id));const unmatched=[...(s.bank?.rows||[]).filter(x=>!usedB.has(x.id)).map(x=>({...x,side:'bank'})),...[...(s.ledger?.rows||[]),...s.carry].filter(x=>!usedL.has(x.id)).map(x=>({...x,side:'ledger'}))];const exceptions=$('exceptions');exceptions.replaceChildren();if(!unmatched.length)empty(exceptions,'No unmatched records in the imported sources.');unmatched.forEach(row=>{const box=el('div',undefined,'exception');box.append(record(row,row.side==='bank'?'Bank exception':'Book / opening outstanding'));const classification=s.classifications[row.id];if(classification)box.append(el('p','Reviewed: '+classification.kind.replaceAll('_',' ')+' · '+classification.evidence,'fine'));if(row.origin_side==='opening'||row.carried_from)box.append(el('p','Retained as outstanding from the evidenced opening / prior completed period until it clears.','fine'));const controls=el('form',undefined,'inline');const kindLabel=el('label','Treatment');const kind=el('select');const choices=row.side==='bank'?[['bank_fee','Bank fee · pending book posting'],['interest','Interest · pending book posting'],['returned_payment','Returned payment · pending book posting'],['book_adjustment','Other book adjustment · pending posting'],['bank_correction','Evidenced bank error / correction']]:[['outstanding',row.amount.startsWith('-')?'Outstanding withdrawal':'Deposit in transit']];choices.forEach(([value,text])=>kind.append(option(value,text)));if(classification)kind.value=classification.kind;kindLabel.append(kind);const noteLabel=el('label','Evidence / review note');const note=el('input');note.required=true;note.value=classification?.evidence||'';note.placeholder='Identify supporting evidence';noteLabel.append(note);const button=el('button','Save treatment','secondary');button.type='submit';button.disabled=s.status==='completed';controls.append(kindLabel,noteLabel,button);controls.addEventListener('submit',handle(async()=>{await api('/api/classifications',{row_id:row.id,kind:kind.value,evidence:note.value});await refresh();}));box.append(controls);exceptions.append(box);});
+renderMatchReview(s);
+renderChecklists();
+renderExceptions(s);
 const blockers=$('blockers');blockers.replaceChildren();if(r.blockers.length){const list=el('ul',undefined,'blocker-list');r.blockers.forEach(message=>list.append(el('li',typeof message==='string'?message:message.message)));blockers.append(list);}else blockers.append(el('div',s.status==='completed'?'Accepted and completed. The historical evidence and outstanding schedule are saved.':'All deterministic controls pass and the adjusted balances agree exactly. Explicit human acceptance is still required.','ready'));$('complete-button').textContent=s.status==='completed'?'Reopen reconciliation':'Accept & complete reconciliation';$('complete-button').disabled=s.status!=='completed'&&!r.ready_to_complete;$('finish-title').textContent=s.status==='completed'?'A completed, evidenced reconciliation.':'An exact tie-out, with evidence.';for(const [id,format]of[['csv-export','csv'],['xlsx-export','xlsx'],['print-export','html'],['backup-export','json']])$(id).href='/api/export/'+format+'?'+new URLSearchParams({session_id:s.id,workspace_id:w.id,input_version:s.input_version,revision:w.version}).toString();$('export-context').textContent='Exact export: '+w.name+' / '+s.account_label+' / '+s.id+' / input version '+s.input_version+'. JSON backup includes this workspace’s saved periods; no connection credentials.';$('history').replaceChildren(...s.history.slice().reverse().map(entry=>{const node=el('div',entry.action.replaceAll('_',' '),'history-entry');node.append(el('small',entry.at+' · input version '+entry.input_version));return node;}));$('propose').disabled=s.status==='completed';$('import-form').querySelector('button[type=submit]').disabled=s.status==='completed';$('anchor-form').querySelector('button[type=submit]').disabled=s.status==='completed';}
+function renderChecklists(){
+  const plans=currentState.assistant_checklists||[];
+  $('assistant-plans-box').hidden=!plans.length;
+  $('assistant-plans').replaceChildren();
+  for(const plan of plans){
+    if(typeof window.renderBankEvidence==='function')$('assistant-plans').append(window.renderBankEvidence({id:plan.id,label:'Saved review checklist',data:{plan}}));
+  }
+}
+$('assistant-plan-example').addEventListener('click',()=>{
+  $('chat-message').value='Read the selected reconciliation evidence and draft a short review checklist for the remaining work. Save it for my review; execute no actions.';
+  $('chat-message').focus();
+});
+$('assistant-match-example').addEventListener('click',()=>{
+  $('chat-message').value='Inspect the selected sources and propose one page of up to forty deterministic matches for my review. Stop after that page and explain any remaining exceptions.';
+  $('chat-message').focus();
+});
+function matchesExceptionFilter(row){
+  const side=$('exception-side').value||'all',query=$('exception-search').value.trim().toLocaleLowerCase();
+  return (side==='all'||row.side===side)&&(!query||[row.id,row.date,row.amount,row.description].some(value=>String(value).toLocaleLowerCase().includes(query)));
+}
+function renderExceptions(s){
+const usedB=new Set(s.matches.map(x=>x.bank_id)),usedL=new Set(s.matches.map(x=>x.ledger_id));const unmatched=[...(s.bank?.rows||[]).filter(x=>!usedB.has(x.id)).map(x=>({...x,side:'bank'})),...[...(s.ledger?.rows||[]),...s.carry].filter(x=>!usedL.has(x.id)).map(x=>({...x,side:'ledger'}))].filter(matchesExceptionFilter);const exceptions=$('exceptions');exceptions.replaceChildren();$('exceptions-count').textContent=unmatched.length+' unmatched records shown · '+(s.bank?.rows?.length||0)+' imported bank rows / '+((s.ledger?.rows?.length||0)+s.carry.length)+' book and opening rows.';if(!unmatched.length)empty(exceptions,'No unmatched records fit this view.');unmatched.forEach(row=>{const box=el('div',undefined,'exception');box.append(record(row,row.side==='bank'?'Bank exception':'Book / opening outstanding'));const why=currentState.match_diagnostics?.rows?.find(item=>item.bank_id===row.id);if(why)box.append(el('p',why.message,'fine'));const investigate=el('button','Investigate this item','quiet');investigate.type='button';investigate.addEventListener('click',()=>{$('chat-message').value='Investigate unmatched '+row.side+' record '+row.id+'. Read its evidence and explain what needs review. Draft any suggested actions for my review.';$('chat-message').focus();});box.append(investigate);const classification=s.classifications[row.id];if(classification)box.append(el('p','Reviewed: '+classification.kind.replaceAll('_',' ')+' · '+classification.evidence,'fine'));if(row.origin_side==='opening'||row.carried_from)box.append(el('p','Retained as outstanding from the evidenced opening / prior completed period until it clears.','fine'));const controls=el('form',undefined,'inline');const kindLabel=el('label','Treatment');const kind=el('select');const choices=row.side==='bank'?[['bank_fee','Bank fee · pending book posting'],['interest','Interest · pending book posting'],['returned_payment','Returned payment · pending book posting'],['book_adjustment','Other book adjustment · pending posting'],['bank_correction','Evidenced bank error / correction']]:[['outstanding',row.amount.startsWith('-')?'Outstanding withdrawal':'Deposit in transit']];choices.forEach(([value,text])=>kind.append(option(value,text)));if(classification)kind.value=classification.kind;kindLabel.append(kind);const noteLabel=el('label','Evidence / review note');const note=el('input');note.required=true;note.value=classification?.evidence||'';note.placeholder='Identify supporting evidence';noteLabel.append(note);const button=el('button','Save treatment','secondary');button.type='submit';button.disabled=s.status==='completed';controls.append(kindLabel,noteLabel,button);controls.addEventListener('submit',handle(async()=>{await api('/api/classifications',{row_id:row.id,kind:kind.value,evidence:note.value});await refresh();}));box.append(controls);exceptions.append(box);});
+}
+$('exception-search').addEventListener('input',()=>{if(currentState?.session)renderExceptions(currentState.session);});
+$('exception-side').addEventListener('change',()=>{if(currentState?.session)renderExceptions(currentState.session);});
+const selectedProposalIds = new Set();
+function rowChoice(row){return row.date+' · '+row.amount+' · '+row.description.slice(0,80)+' · row '+row.ordinal+' · '+row.id;}
+function updateBatchSelection(){
+  const count=selectedProposalIds.size;
+  $('batch-selection').textContent=count+' reviewed pair'+(count===1?'':'s')+' selected (maximum 40).';
+  $('batch-confirm').disabled=!count||currentState?.session?.status==='completed';
+}
+function renderManualLedger(){
+  const s=currentState.session,bank=rowById($('manual-bank').value);
+  const used=new Set(s.matches.map(item=>item.ledger_id));
+  $('manual-ledger').replaceChildren(option('','Choose the corresponding book record'),
+    ...[...(s.ledger?.rows||[]),...s.carry].filter(row=>!used.has(row.id)&&bank&&row.amount===bank.amount).map(row=>option(row.id,rowChoice(row))));
+}
+function renderMatchReview(s){
+  selectedProposalIds.clear();
+  updateBatchSelection();
+  $('batch-review').hidden=!s.drafts.length||s.status==='completed';
+  const proposals=$('proposal-list');proposals.replaceChildren();
+  if(!s.drafts.length)empty(proposals,'No pending suggestions. Generate candidates, or ask the assistant to investigate.');
+  s.drafts.forEach(proposal=>{
+    const b=rowById(proposal.bank_id),l=rowById(proposal.ledger_id);if(!b||!l)return;
+    const box=el('div',undefined,'proposal');
+    const selection=el('label',undefined,'check');
+    const checkbox=el('input');checkbox.type='checkbox';checkbox.disabled=s.status==='completed';
+    checkbox.setAttribute('aria-label','Select reviewed pair: '+b.id+' and '+l.id);
+    checkbox.addEventListener('change',()=>{
+      if(checkbox.checked&&selectedProposalIds.size>=40){checkbox.checked=false;notice('Review at most forty pairs in one batch.');return;}
+      if(checkbox.checked&&s.drafts.some(other=>selectedProposalIds.has(other.id)&&(other.bank_id===proposal.bank_id||other.ledger_id===proposal.ledger_id))){checkbox.checked=false;notice('That bank or book record is already selected. Choose one proposal for each transaction.');return;}
+      if(checkbox.checked)selectedProposalIds.add(proposal.id);else selectedProposalIds.delete(proposal.id);
+      updateBatchSelection();
+    });
+    selection.append(checkbox,el('span','Include this pair in selected review'));
+    const pair=el('div',undefined,'pair');pair.append(record(b,'Bank statement'),el('span','↔','arrow'),record(l,'Books'));
+    const foot=el('div',undefined,'proposal-foot');foot.append(el('p',proposal.reason));
+    const review=el('form',undefined,'inline');const noteLabel=el('label','Review evidence / who performed it','grow');
+    const note=el('textarea');note.required=true;note.maxLength=2000;note.rows=2;note.placeholder='Identify review evidence and the reviewer; describe any assistant demonstration as such.';note.disabled=s.status==='completed';noteLabel.append(note);
+    const button=el('button','Confirm reviewed match','secondary');button.type='submit';button.disabled=s.status==='completed';
+    review.addEventListener('submit',handle(async()=>{await api('/api/matches/confirm',{proposal_id:proposal.id,note:note.value});await refresh();}));
+    review.append(noteLabel,button);box.append(selection,pair,foot,review);proposals.append(box);
+  });
+  $('confirmed-title').textContent='Confirmed matches · '+s.matches.length;
+  const confirmed=$('confirmed-list');confirmed.replaceChildren();
+  s.matches.forEach(match=>{
+    const box=el('div',undefined,'proposal');const pair=el('div',undefined,'pair');
+    pair.append(record(rowById(match.bank_id),'Bank'),el('span','↔','arrow'),record(rowById(match.ledger_id),'Books'));
+    const button=el('button','Undo this confirmation','quiet');button.disabled=s.status==='completed';
+    button.addEventListener('click',handle(async()=>{await api('/api/matches/unconfirm',{match_id:match.id});await refresh();}));
+    box.append(pair,el('p','Review note: '+match.note,'fine'),button);confirmed.append(box);
+  });
+  const used=new Set(s.matches.map(item=>item.bank_id));
+  $('manual-bank').replaceChildren(option('','Choose an unmatched bank record'),
+    ...(s.bank?.rows||[]).filter(row=>!used.has(row.id)).map(row=>option(row.id,rowChoice(row))));
+  $('manual-bank').disabled=$('manual-ledger').disabled=$('manual-confirm').disabled=s.status==='completed';
+  $('manual-note').value='';$('batch-note').value='';renderManualLedger();
+  const diagnostic=currentState.match_diagnostics;
+  $('match-diagnostics').replaceChildren();
+  if(diagnostic){
+    $('match-diagnostics').append(el('p',diagnostic.message||'Review suggestions against both independent sources.'));
+    for(const [reason,count] of Object.entries(diagnostic.reason_counts||{}))if(count)$('match-diagnostics').append(el('p',count+' · '+reason.replaceAll('_',' ')));
+  }
+}
+$('manual-bank').addEventListener('change',renderManualLedger);
+$('manual-match').addEventListener('submit',handle(async()=>{
+  await api('/api/matches/confirm',{bank_id:$('manual-bank').value,ledger_id:$('manual-ledger').value,input_version:currentState.session.input_version,note:$('manual-note').value});
+  await refresh();notice('Reviewed manual pair confirmed.');
+}));
+$('batch-review').addEventListener('submit',handle(async()=>{
+  const result=await api('/api/matches/confirm-selected',{proposal_ids:[...selectedProposalIds],note:$('batch-note').value});
+  await refresh();notice(result.count+' reviewed pairs confirmed.');
+}));
 $('workspace-select').addEventListener('change',handle(async()=>{if(!$('workspace-select').value)return;await api('/api/workspaces/select',{workspace_id:$('workspace-select').value});preview=null;$('import-preview').hidden=true;await refresh();}));$('new-workspace-toggle').addEventListener('click',()=>{$('workspace-form').hidden=!$('workspace-form').hidden;});$('workspace-form').addEventListener('submit',handle(async()=>{await api('/api/workspaces/new',data($('workspace-form')));$('workspace-form').reset();$('workspace-form').hidden=true;await refresh();}));async function exampleAction(action){
   if(exampleOpening)return;
   exampleOpening=true;
@@ -79,7 +184,38 @@ $('sample-close').addEventListener('click',()=>$('sample-picker').close());
 $('new-session-toggle').addEventListener('click',()=>{$('session-form').hidden=!$('session-form').hidden;});$('session-form').addEventListener('submit',handle(async()=>{await api('/api/sessions/new',data($('session-form')));$('session-form').hidden=true;await refresh();}));$('session-select').addEventListener('change',handle(async()=>{if(!$('session-select').value)return;await api('/api/sessions/select',{session_id:$('session-select').value});preview=null;$('import-preview').hidden=true;await refresh();}));
 $('import-form').addEventListener('submit',handle(async()=>{const file=$('csv-file').files[0];if(!file)throw Error('Choose a CSV file.');if(file.size>2000000)throw Error('CSV is limited to 2 MB.');const values=data($('import-form'));const mapping=Object.fromEntries(['date','description','amount','account','currency'].map(key=>[key,values['map_'+key]]));preview=await api('/api/imports/preview',{side:values.side,csv:await file.text(),opening:values.opening,closing:values.closing,source:values.source,mapping});const box=$('import-preview');box.hidden=false;box.replaceChildren(el('strong',preview.ready?'Source controls passed':'Source controls failed'),el('p',preview.total_rows+' source rows · '+preview.valid_rows+' valid rows · activity '+preview.activity+' · opening '+preview.opening+' → closing '+preview.closing));if(preview.errors.length){const list=el('ul',undefined,'blocker-list');preview.errors.forEach(error=>list.append(el('li',(error.ordinal?'Row '+error.ordinal+': ':'')+error.message)));box.append(list);}else{const button=el('button','Accept & import this source','primary');button.addEventListener('click',handle(async()=>{await api('/api/imports/commit',{preview_id:preview.id});box.hidden=true;preview=null;await refresh();notice('Source imported. Previous match reviews were reset to preserve the evidence boundary.');}));box.append(button);}box.append(el('p','Source SHA-256: '+preview.source_hash,'fine'));}));$('anchor-form').addEventListener('submit',handle(async()=>{const values=data($('anchor-form'));let outstanding;try{outstanding=JSON.parse(values.outstanding);}catch{throw Error('Opening outstanding items must be a JSON list.');}await api('/api/anchor',{kind:values.kind,as_of:values.as_of,evidence:values.evidence,outstanding});await refresh();notice('Opening evidence accepted.');}));$('propose').addEventListener('click',handle(async()=>{await api('/api/matches/propose',{});await refresh();}));$('complete-form').addEventListener('submit',handle(async()=>{const action=currentState.session.status==='completed'?'reopen':'complete';await api('/api/sessions/'+action,{note:$('acceptance-note').value});$('acceptance-note').value='';await refresh();notice(action==='complete'?'Reconciliation accepted and completed.':'Reconciliation reopened; prior evidence remains in history.');}));$('restore-file').addEventListener('change',handle(async()=>{const file=$('restore-file').files[0];if(!file)return;if(file.size>15000000)throw Error('Backup exceeds 15 MB.');let payload;try{payload=JSON.parse(await file.text());}catch{throw Error('This file is not valid JSON.');}await api('/api/restore',payload);$('restore-file').value='';await refresh();notice('Backup restored into a separate workspace.');}));$('delete-workspace').addEventListener('click',handle(async()=>{const w=currentState.workspace;const typed=window.prompt('Type the exact selected workspace name to delete its local financial data. Export a backup first if needed.\n'+w.name);if(typed===null)return;await api('/api/workspaces/current',{confirm_name:typed},'DELETE');await refresh();notice('Selected workspace deleted locally.');}));
 function chat(text,kind='assistant'){const node=el('p',text,'chat-message '+kind+'-message');$('chat-log').append(node);$('chat-log').scrollTop=$('chat-log').scrollHeight;return node;}
-$('chat-form').addEventListener('submit',handle(async()=>{if(!$('rehearsal').checked&&!(modelStatus?.configured&&modelStatus?.consent)){await openSettings();notice('Connect your assistant here. Your question is still in the chat.');return;}const message=$('chat-message').value;chat(message,'user');$('chat-message').value='';$('chat-send').disabled=true;$('chat-cancel').hidden=false;controller=new AbortController();const waiting=chat('Reading the selected period’s local evidence…');try{const response=await fetch('/api/assistant',{method:'POST',headers:{'Content-Type':'application/json','X-Vesper-CSRF':csrf,'X-Vesper-Scope':JSON.stringify(currentState?.scope||{})},body:JSON.stringify({message,rehearsal:$('rehearsal').checked}),signal:controller.signal});const result=await response.json();if(!response.ok)throw Error(result.error||result.detail||'Assistant unavailable. Your reconciliation is saved.');waiting.textContent=(result.mode==='synthetic-rehearsal'?'SYNTHETIC REHEARSAL\n':'')+result.message;for(const item of result.evidence||[]){const details=el('details');details.append(el('summary',item.label||item.id),el('pre',JSON.stringify(item.data,null,2),'chat-evidence'));$('chat-log').append(details);}if(result.proposals?.length)chat('Draft match proposals are ready in Match Review. Confirm each pair there.');await refresh();}catch(error){waiting.textContent=error.name==='AbortError'?'Request cancelled. Your saved work is unchanged.':error.message;throw error;}finally{$('chat-send').disabled=false;$('chat-cancel').hidden=true;controller=null;}}));$('chat-cancel').addEventListener('click',handle(async()=>{await api('/api/assistant/cancel',{});controller?.abort();}));
+$('chat-form').addEventListener('submit',handle(async()=>{
+  if(!$('rehearsal').checked&&!(modelStatus?.configured&&modelStatus?.consent)){await openSettings();notice('Connect your assistant here. Your question is still in the chat.');return;}
+  const message=$('chat-message').value,rehearsal=$('rehearsal').checked,capturedScope=JSON.stringify(currentState?.scope||{}),capturedGeneration=assistantSelectionGeneration;
+  if(!pendingAssistantRequest||pendingAssistantRequest.message!==message||pendingAssistantRequest.rehearsal!==rehearsal||pendingAssistantRequest.scope!==capturedScope){
+    pendingAssistantRequest={id:'question_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2),message,rehearsal,scope:capturedScope};
+  }
+  const requestId=pendingAssistantRequest.id;
+  chat(message,'user');$('chat-message').value='';$('chat-send').disabled=true;$('chat-cancel').hidden=false;
+  controller=new AbortController();const waiting=chat('Reading the selected period’s local evidence…');
+  try{
+    const response=await fetch('/api/assistant',{method:'POST',headers:{'Content-Type':'application/json','X-Vesper-CSRF':csrf,'X-Vesper-Scope':capturedScope},body:JSON.stringify({message,rehearsal,request_id:requestId}),signal:controller.signal});
+    const result=await response.json();
+    pendingAssistantRequest=null;
+    if(capturedGeneration!==assistantSelectionGeneration||capturedScope!==JSON.stringify(currentState?.scope||{}))return;
+    if(!response.ok)throw Error(result.error||result.detail||'Assistant unavailable. Your reconciliation is saved.');
+    lastAssistantResponseScope=capturedScope;assistantEvidenceStale=false;
+    waiting.textContent=(result.mode==='synthetic-rehearsal'?'SYNTHETIC REHEARSAL\n':'')+result.message+(result.replayed?'\nSaved response · no new model call.':'');
+    for(const item of result.evidence||[]){
+      if(typeof window.renderBankEvidence==='function')$('chat-log').append(window.renderBankEvidence(item));
+      else{const details=el('details');details.append(el('summary',item.label||item.id),el('pre',JSON.stringify(item.data,null,2),'chat-evidence'));$('chat-log').append(details);}
+    }
+    if(result.proposals?.length)chat('Draft match proposals are ready in Match Review. Review and confirm the pairs there.');
+    await refresh();
+  }catch(error){
+    if(capturedGeneration===assistantSelectionGeneration&&capturedScope===JSON.stringify(currentState?.scope||{})){
+      waiting.textContent=error.name==='AbortError'?'Request cancelled. Review any saved drafts before asking a new question.':error.message;
+      if(pendingAssistantRequest?.id===requestId)$('chat-message').value=message;
+    }
+    throw error;
+  }finally{$('chat-send').disabled=false;$('chat-cancel').hidden=true;controller=null;}
+}));
+$('chat-cancel').addEventListener('click',handle(async()=>{await api('/api/assistant/cancel',{});controller?.abort();}));
 function showConnectionUnavailable(){
   $('model-status').textContent='Assistant connection could not be checked. Open settings to try again.';
   $('model-connection-summary').textContent='We could not check your connection. Try opening these settings again. Your reconciliation is saved.';

@@ -1,5 +1,18 @@
 # Release checklist
 
+## Source release 0.4.0 — preparation on 2026-10-29
+
+`primary-record`: On 2026-10-29, Owen authorized publication of the standalone Bank Rec update: “okay, lets push.” The no-added-license decision remains in force.
+
+- [x] Prepare release notes for bank-specific exact/duplicate-group/memo matching, unmatched diagnostics, manual/selected review, scoped assistant pages/drafts/checklists and request replay in the existing standalone application.
+- [x] Retain exact source controls, source identities, financial calculations, review requirements, acceptance history and secret/export boundaries; document remaining extraction gaps without claiming full parity.
+- [x] Record the historical **2026-10-28 preparation checks**: 478 Python tests, 49 Node UI checks, Ruff, syntax, local documentation targets and whitespace checks. These counts are earlier evidence, not a claim of new checks on 2026-10-29.
+- [x] Record the earlier synthetic selected-duplicate review, request replay, checklist staleness/restoration and numeric workbook checks, with the original completed financial document unchanged.
+- [x] Complete the final 0.4.0 source inventory and newly rerun release checks on 2026-10-29: 478 Python tests, 49 Node UI checks, Ruff, syntax, local links and whitespace. Exclude credentials, financial data, environments, exports, build outputs and repository metadata from the downloadable source.
+- [ ] Publish the reviewed 0.4.0 source update and verify the actual public downloaded ZIP against the reviewed source, including launcher mode, fresh pinned setup and account-free synthetic exports.
+
+A real embedded AI explanation remains the leading unresolved verification gap. Firm-authorized accounting API access, real credential-store persistence, Windows and normal Finder launch behavior remain unverified. Python is still required for a new local host; no hosted deployment or Python-free application is claimed. Preparation evidence and historical results remain separate in [Verification](docs/VERIFICATION.md).
+
 `primary-record`: On 2026-10-28, Owen authorized public GitHub publication under `owenbyram-spec` and chose: “Publish publicly without adding a license yet.”
 
 Publication destination: [vesper-bank-rec](https://github.com/owenbyram-spec/vesper-bank-rec). No LICENSE file is added in this release. Publication authorization is not a legal ownership finding; source provenance is recorded in [the provenance note](docs/PROVENANCE.md).
