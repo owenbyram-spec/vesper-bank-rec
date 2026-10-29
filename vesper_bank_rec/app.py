@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from .models import DomainError, label, evidence, digest, uid, now
 from .store import Store
-from .imports import preview_csv, qbo_preview
+from .imports import preview_csv, accounting_preview
 from .matching import candidates, unmatched, validate_pair
 from .reconciliation import (
     current,
@@ -254,11 +254,11 @@ def create_app(data_dir: Path | None = None, port: int = 8765, testing=False):
             ),
         ]
 
-    def qbo_sync(client, captured, params):
+    def accounting_sync(client, captured, params, *, provider):
         _workspace, session = assert_scope(captured)
         editable(session)
         if any(key not in ("account_id", "start_date", "end_date") for key in params):
-            raise DomainError("QBO sync accepts only the exact selected account and period.")
+            raise DomainError("Accounting import accepts only the exact selected account and period.")
         requested = {
             "account_id": params.get("account_id", session["account_id"]),
             "start_date": params.get("start_date", session["period_start"]),
@@ -270,13 +270,15 @@ def create_app(data_dir: Path | None = None, port: int = 8765, testing=False):
             "end_date": session["period_end"],
         }:
             raise DomainError(
-                "QBO request must equal the selected account and period. Select the intended period first."
+                "Accounting request must equal the selected account and period. Select the intended period first."
             )
         result = client.bank_ledger(**requested)
-        preview = qbo_preview(session, result)
+        preview = accounting_preview(session, result, source=(
+            "QuickBooks GeneralLedger read" if provider == "QBO" else "Xero controlled bank-ledger read"
+        ))
         if not preview["ready"]:
             raise DomainError(
-                "QBO ledger controls failed; existing work was preserved. " + str(preview["errors"])
+                "Accounting ledger controls failed; existing work was preserved. " + str(preview["errors"])
             )
         with store.edit(
             expected_workspace_id=captured["id"],
@@ -287,7 +289,7 @@ def create_app(data_dir: Path | None = None, port: int = 8765, testing=False):
             selected = current(workspace)
             commit_import(workspace, selected, preview)
         return {
-            "message": "Controlled QBO book ledger imported. Review the independent bank source and opening anchor.",
+            "message": f"Controlled {provider} book ledger imported. Review the independent bank source and opening anchor.",
             "evidence_id": preview["source_hash"],
             "rows": len(preview["rows"]),
             "session_id": session["id"],
@@ -299,7 +301,9 @@ def create_app(data_dir: Path | None = None, port: int = 8765, testing=False):
         port=port,
         workspace_getter=scope,
         tools_factory=tools_factory,
-        qbo_sync=qbo_sync,
+        qbo_sync=lambda c, s, p: accounting_sync(c, s, p, provider="QBO"),
+        xero_sync=lambda c, s, p: accounting_sync(c, s, p, provider="Xero"),
+        scope_lock=store.lock,
         testing=testing,
     )
 
@@ -331,20 +335,29 @@ def create_app(data_dir: Path | None = None, port: int = 8765, testing=False):
             raise DomainError(
                 "Supported currencies are USD, CAD, GBP, EUR, AUD and NZD. This app uses two-decimal money and does not convert currencies."
             )
-        workspace = store.create(name, currency, False)
+        with store.lock:
+            previous = scope()
+            if previous:
+                app.state.common.xero.invalidate(previous["id"])
+            workspace = store.create(name, currency, False)
         app.state.common.settings.register_new_workspace(workspace["id"])
         return {"workspace_id": workspace["id"]}
 
     @app.post("/api/workspaces/select")
     def workspace_select(body: dict = Body(...)):
-        workspace = store.select(body.get("workspace_id"))
+        with store.lock:
+            previous = scope()
+            if previous:
+                app.state.common.xero.invalidate(previous["id"])
+            workspace = store.select(body.get("workspace_id"))
+            app.state.common.xero.invalidate(workspace["id"])
         return {"workspace_id": workspace["id"]}
 
     @app.delete("/api/workspaces/current")
     def workspace_delete(body: dict = Body(...)):
         common = app.state.common
         common.polling.stop()
-        with common.polling.run_lock:
+        with common.polling.run_lock, common.xero.lock:
             with store.lock:
                 workspace = require_displayed_scope(body)
                 if body.get("confirm_name") != workspace["name"]:
@@ -353,6 +366,8 @@ def create_app(data_dir: Path | None = None, port: int = 8765, testing=False):
                     )
                 common.settings.remove(workspace["id"], "qbo")
                 common.settings.remove(workspace["id"], "model")
+                common.xero.invalidate(workspace["id"])
+                common.settings.remove(workspace["id"], "xero")
                 store.delete(workspace["id"])
         return {"deleted": True}
 
@@ -423,7 +438,7 @@ def create_app(data_dir: Path | None = None, port: int = 8765, testing=False):
                 "bank_id": bank_id,
                 "ledger_id": ledger_id,
                 "accepted_at": now(),
-                "note": evidence(body.get("note", "Human reviewed exact one-to-one match")),
+                "note": evidence(body.get("note")),
             }
             session["matches"].append(match)
             session["drafts"] = [

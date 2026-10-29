@@ -1,0 +1,32 @@
+VESPER & CO — BANK REC
+
+LOCAL DESKTOP CANDIDATE — NOT A PUBLIC RELEASE
+
+No Python installation, terminal command, or package download is needed to run
+this bundled candidate. Extract the complete ZIP before opening it. On macOS,
+open Vesper Bank Rec.app. On Windows, keep the complete Vesper Bank Rec folder
+together and open Vesper Bank Rec.exe inside it.
+
+The application opens in your browser and runs on this computer in the
+background. Choose Quit app at the top of Bank Rec when finished. Closing a
+browser tab alone does not stop the app; opening the app again returns to it.
+Financial calculations and exports work without an AI key. AI and QuickBooks
+connections are optional and contact their respective providers only as
+described in the app. Enter keys only in the app's masked settings fields.
+
+Existing saved work stays in the operating system's application-data folder,
+outside this application. Moving or replacing the app does not move that data.
+Use the app's JSON workspace backup before a migration. Source-based launchers
+and this desktop app share the default data folder; do not run them together.
+
+This candidate has not established public-download trust on a fresh device.
+The default local macOS build is ad-hoc signed, not Developer ID signed or
+notarized; Gatekeeper may block a downloaded copy. Do not disable device
+security protections. A normal public download needs an authorized release
+signing/notarization process and a fresh browser-download/Finder test. Windows
+execution and Windows signing require separate verification on Windows.
+
+SOURCE-MANIFEST.json identifies the exact included application files and
+versions. THIRD-PARTY-NOTICES.txt preserves installed dependency and Python
+license notices. No software license has been added for Vesper's own source.
+Bundled native-library notice completeness needs review before public release.

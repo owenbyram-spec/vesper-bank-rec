@@ -11,10 +11,12 @@ from starlette.responses import JSONResponse
 
 
 class LocalSecurityMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, *, port: int, testing: bool = False):
+    def __init__(self, app, *, port: int, testing: bool = False, shutting_down=None, xero_callback_path=None):
         super().__init__(app)
         self.port = port
         self.testing = testing
+        self.shutting_down = shutting_down
+        self.xero_callback_path = xero_callback_path
         self.session = secrets.token_urlsafe(32)
         self.csrf_token = secrets.token_urlsafe(32)
         # Each app/port has a separate browser session even on the same host.
@@ -45,17 +47,32 @@ class LocalSecurityMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         def denied(message):
-            return JSONResponse({"detail": message}, status_code=403)
+            return self._headers(JSONResponse({"detail": message}, status_code=403))
 
-        if not self._valid_host(request.headers.get("host", "")):
+        callback_path = request.url.path == self.xero_callback_path
+        if callback_path:
+            raw_query = request.scope.get("query_string", b"")
+            # Capture only for the callback handler and redact the shared ASGI
+            # scope before Uvicorn formats its access log (including failures).
+            request.state.xero_callback_params = (
+                list(request.query_params.multi_items()) if len(raw_query) <= 16000 else []
+            )
+            request.scope["query_string"] = b""
+        oauth_callback = (
+            callback_path and request.method == "GET"
+            and request.headers.get("host", "").lower() == f"localhost:{self.port}"
+        )
+        if callback_path and not oauth_callback:
+            return denied("Use the registered localhost Xero callback address.")
+        if not oauth_callback and not self._valid_host(request.headers.get("host", "")):
             return denied("Open the app at its displayed 127.0.0.1 address.")
         origin = request.headers.get("origin")
-        if origin is not None and not self._valid_origin(origin):
+        if not oauth_callback and origin is not None and not self._valid_origin(origin):
             return denied("Cross-site requests are not allowed.")
-        if request.headers.get("sec-fetch-site") in {"cross-site", "same-site"}:
+        if not oauth_callback and request.headers.get("sec-fetch-site") in {"cross-site", "same-site"}:
             return denied("Use the app's local browser tab.")
         is_api = request.url.path == "/api" or request.url.path.startswith("/api/")
-        if is_api:
+        if is_api and not oauth_callback:
             if not secrets.compare_digest(
                 request.cookies.get(self.cookie_name, ""), self.session
             ):
@@ -66,6 +83,17 @@ class LocalSecurityMiddleware(BaseHTTPMiddleware):
                 ):
                     return denied("Refresh the app and retry this action.")
             request.state.vesper_csrf = self.csrf_token
+            if (
+                request.method not in {"GET", "HEAD", "OPTIONS"}
+                and self.shutting_down is not None
+                and self.shutting_down()
+            ):
+                return self._headers(JSONResponse(
+                    {"detail": "Bank Rec is closing. Open the app again to continue; your saved work is preserved."},
+                    status_code=409,
+                ))
+        if oauth_callback and self.shutting_down is not None and self.shutting_down():
+            return self._headers(JSONResponse({"detail": "Bank Rec is closing. Connect Xero after opening it again."}, status_code=409))
         response = await call_next(request)
         if request.method == "GET" and request.url.path == "/":
             response.set_cookie(
@@ -75,6 +103,10 @@ class LocalSecurityMiddleware(BaseHTTPMiddleware):
                 samesite="strict",
                 path="/",
             )
+        return self._headers(response)
+
+    @staticmethod
+    def _headers(response):
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"

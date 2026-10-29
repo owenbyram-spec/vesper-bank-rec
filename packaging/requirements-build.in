@@ -1,0 +1,2 @@
+# Build-time tooling only; never installed by or downloaded into the desktop app.
+pyinstaller==6.22.3

@@ -1,4 +1,4 @@
-"""One preview/certification path for bank CSV, ledger CSV and normalized QBO reads."""
+"""One preview/certification path for CSV and normalized accounting reads."""
 
 import csv
 import hashlib
@@ -115,7 +115,7 @@ def preview_csv(session, side, payload):
     }
 
 
-def qbo_preview(session, result):
+def accounting_preview(session, result, *, source):
     # All normalized vendor rows pass the exact same account/date/money/control path.
     stream = io.StringIO(newline="")
     writer = csv.writer(stream)
@@ -138,7 +138,7 @@ def qbo_preview(session, result):
             "csv": stream.getvalue(),
             "opening": result["opening_balance"],
             "closing": result["closing_balance"],
-            "source": "QuickBooks GeneralLedger read",
+            "source": source,
         },
     )
     preview["provider_provenance"] = result.get("source", {})
@@ -146,3 +146,7 @@ def qbo_preview(session, result):
         row["provider_source_ids"] = provider_row.get("source_ids", [])
         row["provider_ordinal"] = provider_row.get("source_ordinal", row["ordinal"])
     return preview
+
+
+def qbo_preview(session, result):
+    return accounting_preview(session, result, source="QuickBooks GeneralLedger read")

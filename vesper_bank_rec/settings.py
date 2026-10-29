@@ -111,7 +111,7 @@ class SettingsService:
                     or not isinstance(entries, list)
                     or len(entries) > 20000
                     or any(
-                        not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{64}:(?:model|qbo)", key)
+                        not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{64}:(?:model|qbo|xero)", key)
                         for key in entries
                     )
                 ):
@@ -155,7 +155,7 @@ class SettingsService:
         ):
             raise SettingsError("Register only a newly generated local workspace identity.")
         with self.lock:
-            keys = {self._key(workspace_id, kind) for kind in ("model", "qbo")}
+            keys = {self._key(workspace_id, kind) for kind in ("model", "qbo", "xero")}
             if any(key in self.storage_modes or self.session.get(key) is not None for key in keys):
                 raise SettingsError(
                     "This workspace credential identity is already known; do not register it again."
@@ -324,13 +324,15 @@ class SettingsService:
             raise SettingsError("Choose sandbox or production.")
         return self.save(workspace_id, "qbo", bundle, body.get("persist") is True)
 
-    def public(self, workspace_id):
+    def public(self, workspace_id, *, include_xero=False):
         model, qbo = self.get(workspace_id, "model"), self.get(workspace_id, "qbo")
-        return {
+        mode = self.storage_modes.get(self._key(workspace_id, "model"))
+        result = {
             "model": {
                 "configured": bool(model),
                 "model": model["model"] if model else DEFAULT_MODEL,
                 "consent": bool(model and model.get("consent")),
+                "storage": ("os-credential-store" if mode == "persistent" else "session-only") if model else None,
             },
             "qbo": {
                 "configured": bool(qbo),
@@ -343,9 +345,22 @@ class SettingsService:
                 "if any, were not checked or removed. Unlock the credential store and remove the "
                 "connection to clear a saved copy."
                 if any(
-                    self._key(workspace_id, kind) in self.unverified_persistent for kind in ("model", "qbo")
+                    self._key(workspace_id, kind) in self.unverified_persistent for kind in ("model", "qbo", "xero")
                 )
                 else self.storage_warning
             ),
             "storage": "OS credential store when selected; otherwise this process session only",
         }
+        # Opening AI or QuickBooks setup must not probe an unrelated Xero
+        # credential entry. Resolve it only when the Xero panel is requested.
+        if include_xero:
+            xero = self.get(workspace_id, "xero")
+            xero_mode = self.storage_modes.get(self._key(workspace_id, "xero"))
+            result["xero"] = {
+                "configured": bool(xero),
+                "client_id": xero.get("client_id") if xero else None,
+                "bound": bool(xero and xero.get("bound_company")),
+                "company": xero.get("bound_company") if xero else None,
+                "storage": ("os-credential-store" if xero_mode == "persistent" else "session-only") if xero else None,
+            }
+        return result

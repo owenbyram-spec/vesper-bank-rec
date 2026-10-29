@@ -1,17 +1,27 @@
-# Set up the embedded assistant
+# Connect the assistant
 
-The application runs locally. Its assistant sends your prompt and the selected workflow evidence to OpenAI when you explicitly ask it to use the real model. The model does not run on your computer. Synthetic rehearsal is clearly labelled and makes no model call.
+Bank Rec runs on your computer. The optional assistant uses your own OpenAI API account: your questions and the selected reconciliation evidence are sent to OpenAI when you ask for live assistance. Financial calculations remain in deterministic local code, and you confirm proposed changes yourself.
 
-1. Use your organization's approved OpenAI API account. Open the [API dashboard](https://platform.openai.com/) and its [project API keys](https://platform.openai.com/api-keys) page.
-2. Create a project key with the permissions needed for Responses requests. Review your organization's data-use policy and the provider's current terms before sending client information.
-3. Enable API billing if your account requires it. API usage is billed by the provider to your account. Review [current pricing](https://developers.openai.com/api/docs/pricing), usage and available [spending controls](https://developers.openai.com/api/docs/guides/production-best-practices); do not assume an alert is an enforced cap.
-4. Open the app's connection/settings panel. Enter the key in the dedicated masked field, choose an available model and acknowledge the external data flow. Do not paste credentials into the assistant conversation.
-5. Choose session-only storage or persistence in the operating system credential store. If that store is unavailable, use session-only; the app never falls back to saving plaintext secrets.
-6. Save, then choose the connection test. This is a small billable API request. Development verification uses mocked responses and does not run that test against a real account.
-7. Ask a question about the current workflow. The assistant reads the app's tools and creates reviewable proposals; you accept changes separately.
+## Connect and ask your first question
 
-The initial configurable model is `gpt-5.6-terra`, documented in the [official model reference](https://developers.openai.com/api/docs/models/gpt-5.6-terra). Availability depends on your account. Enter another compatible Responses/function-calling model if needed; there is no silent provider fallback. No real model has been validated without separately authorized credentials.
+1. Open a sample or select the client workspace and period you want to use.
+2. Choose **Connect AI** beside the assistant. You can also open **Connections & settings** at the top of the app.
+3. Enter your OpenAI API key in the masked field. Choose whether to use it for this session or remember it securely, then acknowledge the data flow. The default session choice keeps the key only until the app stops. Remembering it uses the operating system credential store; there is no plaintext fallback.
+4. Choose **Connect assistant**. The app saves your connection and sends a small billable check containing no financial evidence. Wait for **Connected — ready to ask**. The key field clears after saving; that is expected.
+5. Choose **Finish** to return to the assistant. Ask, for example: “Explain this reconciliation and the outstanding item.” Leave **Synthetic rehearsal** unchecked for a real AI response. Rehearsal is separately labelled, uses scripted narration and makes no model call.
 
-Replace/remove a key through settings. Revoke it through the provider's dashboard if compromised. A missing/expired key or provider outage preserves your saved financial work.
+A connection check confirms a small provider response; asking about the reconciliation also exercises the assistant's evidence tools. The assistant can explain results and draft match proposals. Review and confirm each pair separately with a truthful note. See [Verification](VERIFICATION.md) for what has actually been observed against a live account; automated tests use injected provider responses.
 
-[Function calling](https://developers.openai.com/api/docs/guides/function-calling) and [API key security](https://developers.openai.com/api/reference/overview) are the implementation references. Keys are used by the local backend and are never returned to browser storage, exports or logs.
+## Get an API key
+
+Use your organization's approved account on the [OpenAI API platform](https://platform.openai.com/). Create a project key on the [API keys page](https://platform.openai.com/api-keys) with permission to make Responses requests. Enter it only in the app's masked connection field, never in chat, CSVs, screenshots or GitHub.
+
+API usage is billed separately from a ChatGPT subscription. Enable API billing if needed and review [current pricing](https://developers.openai.com/api/docs/pricing), usage and available [spending controls](https://developers.openai.com/api/docs/guides/production-best-practices). Do not assume a spending alert is an enforced cap. Review your organization's policy and the provider's current terms before sending client information.
+
+## If the connection needs attention
+
+The app distinguishes **Connected**, saved settings whose connection check failed, and **Not connected**. If the check fails after saving, read the message and retry after addressing it; saved financial work is preserved. If a connection is already saved, choose **Check connection again** or **Try connection again** without entering the key. To replace the key, enter the new one in the same masked field and connect again. Remove it through connection settings; revoke a compromised key through the provider's dashboard.
+
+Open **Advanced: model choice** only if you need to change the model, or **Troubleshooting details** to investigate an inconsistent connection status. The initial model is `gpt-5.6-terra`; availability depends on your API account. Another compatible Responses/function-calling model can be entered there. The app does not silently switch providers or models. [Troubleshooting](TROUBLESHOOTING.md) covers multiple app copies, saved connections and diagnostic details.
+
+Implementation references: [model reference](https://developers.openai.com/api/docs/models/gpt-5.6-terra), [function calling](https://developers.openai.com/api/docs/guides/function-calling) and [API key security](https://developers.openai.com/api/reference/overview). Keys are used by the local backend and are never returned to browser storage, exports or logs.

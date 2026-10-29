@@ -169,6 +169,19 @@ def test_new_empty_workspace_can_be_removed_with_locked_keychain_after_restart(t
     assert len(list(tmp_path.iterdir())) == 1
 
 
+def test_model_status_does_not_probe_an_unrelated_new_xero_store_entry(tmp_path):
+    locked = LockedSecretStore()
+    settings = SettingsService(tmp_path, locked, testing=True)
+    workspace_id = "workspace_" + "e" * 32
+    # An older workspace knows only the original two connection kinds.
+    for kind in ("model", "qbo"):
+        settings.storage_modes[settings._key(workspace_id, kind)] = "absent"
+    result = settings.public(workspace_id)
+    assert "xero" not in result and locked.calls == []
+    settings.public(workspace_id, include_xero=True)
+    assert locked.calls  # Only an explicit Xero status lookup resolves it.
+
+
 def test_registered_absence_never_hides_later_persisted_credentials(tmp_path):
     class SecureTestStore(MemorySecretStore):
         persistent = True

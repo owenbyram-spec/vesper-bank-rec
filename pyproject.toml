@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vesper-bank-rec"
-version = "0.1.0"
+version = "0.3.0"
 description = "Vesper & Co Bank Rec for CAS teams"
 readme = "README.md"
 requires-python = ">=3.12"

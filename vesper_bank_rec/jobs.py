@@ -10,6 +10,10 @@ def stamp():
     return datetime.now(timezone.utc).isoformat()
 
 
+class RefreshBusy(ValueError):
+    """A second provider refresh must wait for the active read to finish."""
+
+
 class PollingJob:
     def __init__(self, callback):
         self.callback = callback
@@ -39,7 +43,7 @@ class PollingJob:
 
     def run(self, params, workspace_id, callback=None):
         if not self.run_lock.acquire(blocking=False):
-            raise ValueError("A refresh is already running. Wait for it to finish.")
+            raise RefreshBusy("A refresh is already running. Wait for it to finish.")
         with self.lock:
             self.running = True
         try:

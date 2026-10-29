@@ -120,8 +120,17 @@ def xlsx_bytes(workspace, session):
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "Reconciliation"
-    for row in export_rows(workspace, session):
-        sheet.append([safe(cell) for cell in row])
+    for index, row in enumerate(export_rows(workspace, session)):
+        # Only the dedicated amount column contains money. Keep dates, source
+        # identities and numeric-looking labels as protected text. Decimal avoids
+        # rounding through a float before openpyxl writes the numeric XML value;
+        # the supported money range fits within Excel's 15 significant digits.
+        sheet.append([
+            money(value) if index and column == 3 and value != "" else safe(value)
+            for column, value in enumerate(row)
+        ])
+        if index and row[3] != "":
+            sheet.cell(row=sheet.max_row, column=4).number_format = "#,##0.00"
     sheet.freeze_panes = "A2"
     sheet.auto_filter.ref = sheet.dimensions
     for cell in sheet[1]:

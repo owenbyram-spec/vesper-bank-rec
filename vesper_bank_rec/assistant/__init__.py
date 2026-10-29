@@ -147,6 +147,74 @@ def _validate_schema(schema):
     walk(schema)
 
 
+def _connection_error(response):
+    """Translate only recognized status/code categories; never display provider text."""
+    status = response.status_code
+    if status == 401:
+        return (
+            "OpenAI did not accept this API key. Copy an active key from your OpenAI project "
+            "into the app's API key field and connect again. Your reconciliation is saved."
+        )
+    if status == 403:
+        return (
+            "Your OpenAI project does not allow this request. Ask your OpenAI administrator "
+            "to check access to the Responses API and selected model, then connect again. "
+            "Your reconciliation is saved."
+        )
+    if status >= 500:
+        return (
+            "OpenAI is temporarily unavailable. Wait a moment and try again. "
+            "Your reconciliation is saved."
+        )
+    if status == 408:
+        return (
+            "OpenAI did not respond in time. Wait a moment and try again. "
+            "Your reconciliation is saved."
+        )
+
+    # The response body is already bounded by the adapter. Only exact known codes
+    # select a message; model names, provider messages and unknown values stay private.
+    code = None
+    usage_codes = {
+        "insufficient_quota", "credit_balance_exhausted", "organization_spend_limit_exceeded",
+        "project_spend_limit_exceeded", "organization_usage_limit_exceeded", "usage_limit_exceeded",
+    }
+    try:
+        body = response.json()
+        error = body.get("error") if isinstance(body, dict) else None
+        if isinstance(error, dict):
+            candidate = error.get("code")
+            if isinstance(candidate, str) and candidate in usage_codes | {"model_not_found"}:
+                code = candidate
+            elif error.get("type") == "insufficient_quota":
+                code = "insufficient_quota"
+    except (ValueError, TypeError, RecursionError):
+        pass
+    if status in {400, 404} and code == "model_not_found":
+        return (
+            "OpenAI could not find the selected model or allow this project to use it. "
+            "Check the model ID in Advanced: model choice, or ask your OpenAI administrator "
+            "which model your project can use. Your reconciliation is saved."
+        )
+    if status == 429:
+        if code in usage_codes:
+            return (
+                "Your OpenAI API account needs available credits or a higher usage limit. "
+                "Check OpenAI Billing and project limits, or ask your OpenAI administrator, "
+                "then try again. Your reconciliation is saved."
+            )
+        return (
+            "OpenAI is temporarily limiting API requests. Wait and try again later. "
+            "If this continues, ask your OpenAI administrator to review the project's rate "
+            "and usage limits. Your reconciliation is saved."
+        )
+    return (
+        "OpenAI could not accept this request. Check the model in Advanced: model choice, "
+        "or ask your OpenAI administrator to review the app's API access. "
+        "Your reconciliation is saved."
+    )
+
+
 class ResponsesAdapter:
     """One initial provider. Never reads environment variables or an SDK's defaults."""
 
@@ -174,31 +242,35 @@ class ResponsesAdapter:
                 headers={"Authorization": "Bearer " + self.api_key},
                 timeout=min(20, remaining_seconds),
             )
-            if response.status_code in {401, 403}:
-                raise AssistantError(
-                    "The model credentials or model permissions were rejected. Review API setup."
-                )
-            if response.status_code == 429:
-                raise AssistantError(
-                    "The model usage or rate limit was reached. Review the provider dashboard and retry later."
-                )
-            if response.status_code >= 400:
-                raise AssistantError(
-                    "The model request failed. Check model availability and retry; your work is saved."
-                )
             if len(response.content) > 600000:
                 raise AssistantError(
                     "The model response exceeded the local safety limit."
                 )
+            if response.status_code >= 400:
+                raise AssistantError(_connection_error(response))
             data = response.json()
             if not isinstance(data, dict) or not isinstance(data.get("output"), list):
-                raise AssistantError("The model returned an unsupported response.")
+                raise AssistantError(
+                    "OpenAI returned a response the app could not read. Try again; if this continues, "
+                    "contact your support person. Your reconciliation is saved."
+                )
             return data
-        except (httpx.HTTPError, ValueError) as exc:
-            if isinstance(exc, AssistantError):
-                raise
+        except AssistantError:
+            raise
+        except httpx.TimeoutException:
             raise AssistantError(
-                "The model could not be reached or returned invalid data. Your work is saved."
+                "OpenAI did not respond in time. Wait a moment and try again. "
+                "Your reconciliation is saved."
+            ) from None
+        except httpx.HTTPError:
+            raise AssistantError(
+                "The app could not reach OpenAI. Check your internet connection or ask your IT "
+                "team about network access, then try again. Your reconciliation is saved."
+            ) from None
+        except (ValueError, TypeError, RecursionError):
+            raise AssistantError(
+                "OpenAI returned a response the app could not read. Try again; if this continues, "
+                "contact your support person. Your reconciliation is saved."
             ) from None
         finally:
             if owned:
